@@ -286,6 +286,24 @@ class ModelAssertionBuilder(State):
     def populate_bootfs_contents(self):
         for name, volume in self.gadget.volumes.items():
             self._populate_one_bootfs(name, volume)
+        self._next.append(self.pre_image_contents_hooks)
+
+    def pre_image_contents_hooks(self):
+        # Separate populate step for pre image hook.
+        bootfs = None
+        #for name, volume in self.gadget.volumes.items():
+        #    for partnum, part in enumerate(volume.structures):
+        for name, volume in self.gadget.volumes.items():
+            print(name, volume)
+
+        for partnum, part in enumerate(self.gadget.volumes.get('volume').structures):
+            if part.role is StructureRole.system_boot:
+                bootfs = os.path.join(volume.basedir, 'part{}'.format(partnum))
+                break
+        env = {'UBUNTU_IMAGE_HOOK_ROOTFS': self.rootfs,
+		'UBUNTU_IMAGE_HOOK_BOOTFS': bootfs,
+                'UBUNTU_IMAGE_HOOK_GADGET': self.gadget}
+        self.hook_manager.fire('pre-populate-images', env)
         self._next.append(self.prepare_filesystems)
 
     def _prepare_one_volume(self, i, name, volume):
