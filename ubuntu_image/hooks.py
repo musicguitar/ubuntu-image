@@ -23,6 +23,7 @@ _logger = logging.getLogger('ubuntu-image')
 # all the listed hooks are correctly fired during image build time.
 supported_hooks = [
     'post-populate-rootfs',
+    'pre-populate-filesystems',
     ]
 
 

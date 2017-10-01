@@ -512,6 +512,110 @@ touch {}/success
         called_hooks = [x[0][0] for x in fire_mock.call_args_list]
         self.assertListEqual(called_hooks, supported_hooks)
 
+    def test_pre_populate_filesystems_hook_fired(self):
+        # For the purpose of testing, we will be using the post-populate-rootfs
+        # hook as we made sure it's still executed as part of of the
+        # DoNothingBuilder.
+        hookdir = self._resources.enter_context(TemporaryDirectory())
+        hookfile = os.path.join(hookdir, 'pre-populate-filesystems')
+        # Let's make sure that, with the use of post-populate-rootfs, we can
+        # modify the rootfs contents.
+        with open(hookfile, 'w') as fp:
+            fp.write("""\
+#!/bin/sh
+echo "[MAGIC_STRING_FOR_U-I_ROOTFS_HOOKS]" > $UBUNTU_IMAGE_HOOK_ROOTFS/foo_rootfs
+echo "[MAGIC_STRING_FOR_U-I_BOOTFS_HOOKS]" > $UBUNTU_IMAGE_HOOK_BOOTFS/foo_bootfs
+echo "[MAGIC_STRING_FOR_U-I_GADGET_HOOKS]" > $UBUNTU_IMAGE_HOOK_GADGET/foo_gadget
+""")
+        os.chmod(hookfile, 0o744)
+        workdir = self._resources.enter_context(TemporaryDirectory())
+        self._resources.enter_context(patch(
+            'ubuntu_image.__main__.ModelAssertionBuilder',
+            DoNothingBuilder))
+        code = main(('--hooks-directory', hookdir,
+                     '--workdir', workdir,
+                     '--output-dir', workdir,
+                     self.model_assertion))
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(os.path.join(workdir, 'root', 'foo')))
+        imagefile = os.path.join(workdir, 'pc.img')
+        self.assertTrue(os.path.exists(imagefile))
+        # Map the image and grep through it to see if our hook change actually
+        # landed in the final image.
+        with open(imagefile, 'r+b') as fp:
+            m = self._resources.enter_context(mmap(fp.fileno(), 0))
+            self.assertGreaterEqual(m.find(b'[MAGIC_STRING_FOR_U-I_ROOTFS_HOOKS]'), 0)
+            self.assertGreaterEqual(m.find(b'[MAGIC_STRING_FOR_U-I_BOOTFS_HOOKS]'), 0)
+            self.assertGreaterEqual(m.find(b'[MAGIC_STRING_FOR_U-I_GADGET_HOOKS]'), 0)
+
+    def test_pre_populate_filesystems_hook_error(self):
+        # For the purpose of testing, we will be using the post-populate-rootfs
+        # hook as we made sure it's still executed as part of of the
+        # DoNothingBuilder.
+        hookdir = self._resources.enter_context(TemporaryDirectory())
+        hookfile = os.path.join(hookdir, 'post-populate-rootfs')
+        with open(hookfile, 'w') as fp:
+            fp.write("""\
+#!/bin/sh
+echo -n "Failed" 1>&2
+return 1
+""")
+        os.chmod(hookfile, 0o744)
+        self._resources.enter_context(patch(
+            'ubuntu_image.__main__.ModelAssertionBuilder',
+            DoNothingBuilder))
+        mock = self._resources.enter_context(patch(
+            'ubuntu_image.__main__._logger.error'))
+        code = main(('--hooks-directory', hookdir, self.model_assertion))
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            mock.call_args_list[-1],
+            call('Hook script in path {} failed for the post-populate-rootfs '
+                 'hook with return code 1. Output of stderr:\nFailed'.format(
+                    hookfile)))
+
+    def test_pre_populate_filesystems_hook_fired_after_resume(self):
+        # For the purpose of testing, we will be using the post-populate-rootfs
+        # hook as we made sure it's still executed as part of of the
+        # DoNothingBuilder.
+        hookdir = self._resources.enter_context(TemporaryDirectory())
+        hookfile = os.path.join(hookdir, 'post-populate-rootfs')
+        with open(hookfile, 'w') as fp:
+            fp.write("""\
+#!/bin/sh
+touch {}/success
+""".format(hookdir))
+        os.chmod(hookfile, 0o744)
+        workdir = self._resources.enter_context(TemporaryDirectory())
+        self._resources.enter_context(patch(
+            'ubuntu_image.__main__.ModelAssertionBuilder',
+            DoNothingBuilder))
+        main(('--until', 'prepare_image',
+              '--hooks-directory', hookdir,
+              '--workdir', workdir,
+              self.model_assertion))
+        self.assertFalse(os.path.exists(os.path.join(hookdir, 'success')))
+        # Check if after a resume the hook path is still correct and the hooks
+        # are fired as expected.
+        code = main(('--workdir', workdir, '--resume'))
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(os.path.join(hookdir, 'success')))
+
+    @skipIf('UBUNTU_IMAGE_TESTS_NO_NETWORK' in os.environ,
+            'Cannot run this test without network access')
+    def test_pre_populate_filesystems_hook_official_support(self):
+        # This test is responsible for checking if all the officially declared
+        # hooks are called as intended, making sure none get dropped by
+        # accident.
+        self._resources.enter_context(patch(
+            'ubuntu_image.__main__.ModelAssertionBuilder',
+            XXXModelAssertionBuilder))
+        fire_mock = self._resources.enter_context(patch(
+            'ubuntu_image.hooks.HookManager.fire'))
+        code = main(('--channel', 'edge', self.model_assertion))
+        self.assertEqual(code, 0)
+        called_hooks = [x[0][0] for x in fire_mock.call_args_list]
+        self.assertListEqual(called_hooks, supported_hooks)
 
 class TestMainWithBadGadget(TestCase):
     def setUp(self):
